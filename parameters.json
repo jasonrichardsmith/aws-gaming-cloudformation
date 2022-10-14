@@ -1,0 +1,23 @@
+[
+  {
+    "ParameterKey": "Version",
+    "ParameterValue": "1.0.0"
+  },
+  {
+    "ParameterKey": "RootVolumeSize",
+    "ParameterValue": "30"
+  },
+  {
+    "ParameterKey": "HomeVolumeSize",
+    "ParameterValue": "1000"
+  },
+  {
+    "ParameterKey": "BuildInstance",
+    "ParameterValue": "g4ad.xlarge"
+  },
+  {
+    "ParameterKey": "GamerInstance",
+    "ParameterValue": "g4ad.xlarge"
+  }
+]
+

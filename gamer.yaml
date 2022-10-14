@@ -1,0 +1,1030 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AWS gaming setup'
+Parameters:
+  BaseAMIId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>' 
+    Default: '/aws/service/canonical/ubuntu/server/18.04/stable/current/amd64/hvm/ebs-gp2/ami-id'
+    Description: AMI to use, defaults to Ubuntu 18.04 latest
+  Version:
+    Type: String 
+    Default: '1.0.0'
+    Description: Version for Image, must be updated when image has changed, or updates will fail.
+  RootVolumeSize:
+    Type: Number 
+    Default: 30
+    Description: Size of the root volume for the image.
+  HomeVolumeSize:
+    Type: Number 
+    Default: 1000
+    Description: Size of the drive mounted at /home/gamer.
+  MyCIDR:
+    Type: String
+    Description: User cidr range to access Nice DCV
+  BuildImage:
+    Type: String
+    Default: 'g4ad.xlarge'
+
+Resources:
+###
+# Network
+###
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 192.168.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-VPC'
+  InetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-InternetGateway'
+  InetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InetGateway
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PubRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InetGateway
+  PubRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-PubRouteTable'
+  PubRouteTableAssoc1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PubSubnet01
+      RouteTableId: !Ref PubRouteTable
+  PubRouteTableAssoc2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PubSubnet02
+      RouteTableId: !Ref PubRouteTable
+  PubRouteTableAssoc3:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PubSubnet03
+      RouteTableId: !Ref PubRouteTable
+  PubSubnet01:
+    Type: AWS::EC2::Subnet
+    Metadata:
+      Comment: Subnet 01
+    Properties:
+      AvailabilityZone:
+        Fn::Select:
+        - '0'
+        - Fn::GetAZs:
+            Ref: AWS::Region
+      CidrBlock: 192.168.1.0/24
+      VpcId: !Ref VPC
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-PubSubnet01'
+  PubSubnet02:
+    Type: AWS::EC2::Subnet
+    Metadata:
+      Comment: Subnet 02
+    Properties:
+      AvailabilityZone:
+        Fn::Select:
+        - '1'
+        - Fn::GetAZs:
+            Ref: AWS::Region
+      CidrBlock: 192.168.2.0/24
+      VpcId: !Ref VPC
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-PubSubnet02'
+  PubSubnet03:
+    Type: AWS::EC2::Subnet
+    Metadata:
+      Comment: Subnet 03
+    Properties:
+      AvailabilityZone:
+        Fn::Select:
+        - '2'
+        - Fn::GetAZs:
+            Ref: AWS::Region
+      CidrBlock: 192.168.3.0/24
+      VpcId: !Ref VPC
+      MapPublicIpOnLaunch: true
+      Tags:
+      - Key: Name
+        Value: !Sub '${AWS::StackName}-PubSubnet03'
+
+###
+# Security Groups
+###
+
+  GamerSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: GamerSecurityGroup
+      VpcId: !Ref VPC
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8443
+          ToPort: 8443
+          CidrIp: !Ref MyCIDR
+        - IpProtocol: udp
+          FromPort: 8443
+          ToPort: 8443
+          CidrIp: !Ref MyCIDR
+  
+
+###
+# EC2
+###
+
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        NetworkInterfaces:
+          - DeviceIndex: 0
+            AssociatePublicIpAddress: true
+            Groups:
+              - !Ref GamerSecurityGroup
+            DeleteOnTermination: true
+        EbsOptimized: true
+        BlockDeviceMappings:
+          - DeviceName: /dev/sda1
+            Ebs: 
+              DeleteOnTermination: true
+              Encrypted: true
+              VolumeSize: !Ref RootVolumeSize
+              VolumeType: gp3
+        IamInstanceProfile: 
+          Arn: !GetAtt GamerInstanceProfile.Arn
+        ImageId: !GetAtt Image.ImageId
+        UserData:
+            Fn::Base64: !Sub |
+                #!/bin/bash -x
+                password=$(aws secretsmanager get-secret-value --secret-id gamer-secret-password --output text --query "SecretString")
+                useradd -m -U -p $(openssl passwd -1 $password) gamer
+
+  ASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - !Ref PubSubnet01
+      TerminationPolicies:
+        - OldestInstance
+      DesiredCapacity: 0
+      MinSize: '0'
+      MaxSize: 1
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::AccountId}-Gamer-Gamer'
+          PropagateAtLaunch: 'true'
+      MixedInstancesPolicy:
+        InstancesDistribution:
+          OnDemandAllocationStrategy: prioritized
+          OnDemandBaseCapacity: 0
+          OnDemandPercentageAboveBaseCapacity: 0
+          SpotAllocationStrategy: lowest-price
+          SpotInstancePools: 1
+          SpotMaxPrice: ''
+        LaunchTemplate:
+          LaunchTemplateSpecification:
+            LaunchTemplateId: !Ref LaunchTemplate
+            Version: !GetAtt LaunchTemplate.LatestVersionNumber
+          Overrides:
+            - InstanceType: g4ad.xlarge
+
+###
+# IAM
+###
+
+  GamerRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      Description: GamerRole
+      Path: /
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore'
+        - 'arn:aws:iam::aws:policy/EC2InstanceProfileForImageBuilder'
+        - 'arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess'
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: ''
+            Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'secretsmanager:GetSecretValue'
+                Resource:
+                  - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:gamer-secret-password-??????'
+          PolicyName: get-user-password
+
+  GamerInstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      Roles:
+        - !Ref GamerRole
+
+  ASGRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      Description: ASGRole
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: ''
+            Effect: Allow
+            Principal:
+              Service: autoscaling.amazonaws.com
+            Action: 'sts:AssumeRole'
+
+
+
+###
+# LifecycleHook
+###
+
+###
+# IAM Roles
+###
+  EventRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - events.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ssm:StartAutomationExecution'
+                Resource:
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:automation-definition/${GamerOnline}:$DEFAULT
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:automation-definition/${GamerOffline}:$DEFAULT
+          PolicyName: start-ssm-automation-policy
+        - PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'iam:PassRole'
+                Resource: !GetAtt SSMRole.Arn
+          PolicyName: pass-role-ssm-automation-policy
+
+
+
+  SSMRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ssm.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ssm:DescribeInstanceInformation'
+                  - 'ssm:ListCommands'
+                  - 'ssm:ListCommandInvocations'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'ssm:SendCommand'
+                Resource: !Sub arn:aws:ssm:${AWS::Region}::document/AWS-RunShellScript
+              - Effect: Allow
+                Action:
+                  - 'ssm:SendCommand'
+                Resource: !Sub 'arn:aws:ec2:*:*:instance/*'
+              - Effect: Allow
+                Action:
+                  - 'ec2:CreateVolume'
+                  - 'ec2:DeleteVolume'
+                  - 'ec2:DetachVolume'
+                  - 'ec2:DescribeVolumes'
+                  - 'ec2:AttachVolume'
+                  - 'ec2:DescribeInstances'
+                  - 'ec2:CreateSnapshot'
+                  - 'ec2:DescribeSnapshots'
+                  - 'ssm:PutParameter'
+                  - 'ssm:GetParameter'
+                Resource: '*'
+          PolicyName: ssm-automation-policy
+        - PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'autoscaling:CompleteLifecycleAction'
+                Resource: !Sub arn:aws:autoscaling:${AWS::Region}:${AWS::AccountId}:autoScalingGroup:*:autoScalingGroupName/${ASG}
+          PolicyName: complete-lifecycle-policy
+
+
+###
+# Lifecycle Hooks
+###
+
+  GamerLaunchHook:
+    Type: 'AWS::AutoScaling::LifecycleHook'
+    Properties:
+      AutoScalingGroupName: !Ref ASG
+      LifecycleTransition: 'autoscaling:EC2_INSTANCE_LAUNCHING'
+      DefaultResult: CONTINUE
+      HeartbeatTimeout: '120'
+
+  GamerTerminateHook:
+    Type: 'AWS::AutoScaling::LifecycleHook'
+    Properties:
+      AutoScalingGroupName: !Ref ASG
+      LifecycleTransition: 'autoscaling:EC2_INSTANCE_TERMINATING'
+      DefaultResult: CONTINUE
+      HeartbeatTimeout: '120'
+
+###
+# Event Rule
+###
+
+  GamerLaunchingEvent:
+    Type: 'AWS::Events::Rule'
+    Properties:
+      Description: 'Event when gamer is started'
+      EventPattern:
+        source:
+          - aws.autoscaling
+        detail-type:
+          - EC2 Instance-launch Lifecycle Action
+        detail:
+          AutoScalingGroupName:
+            - !Ref ASG
+      Targets:
+        - Arn: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:automation-definition/${GamerOnline}:$DEFAULT'
+          RoleArn: !GetAtt EventRole.Arn
+          Id: GamerOnline
+          InputTransformer:
+            InputPathsMap:
+              instanceid: '$.detail.EC2InstanceId'
+            InputTemplate: !Sub |
+              {
+                "InstanceId":[<instanceid>]
+              }
+
+  GamerTerminatingEvent:
+    Type: 'AWS::Events::Rule'
+    Properties:
+      Description: 'Event when gamer is terminated'
+      EventPattern:
+        source:
+          - aws.autoscaling
+        detail-type:
+          - EC2 Instance-terminate Lifecycle Action
+        detail:
+          AutoScalingGroupName:
+            - !Ref ASG
+      Targets:
+        - Arn: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:automation-definition/${GamerOffline}:$DEFAULT'
+          RoleArn: !GetAtt EventRole.Arn
+          Id: GamerOffline
+          InputTransformer:
+            InputPathsMap:
+              instanceid: '$.detail.EC2InstanceId'
+            InputTemplate: !Sub |
+              {
+                "InstanceId":[<instanceid>]
+              }
+
+  GamerSpotTerminatingEvent:
+    Type: 'AWS::Events::Rule'
+    Properties:
+      Description: 'Event when spot gamer is terminated'
+      EventPattern:
+        source:
+          - aws.ec2
+        detail-type:
+          - EC2 Spot Instance Interruption Warning
+      Targets:
+        - Arn: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:automation-definition/${GamerOffline}:$DEFAULT'
+          RoleArn: !GetAtt EventRole.Arn
+          Id: GamerSpotOffline
+          InputTransformer:
+            InputPathsMap:
+              instanceid: '$.detail.instance-id'
+            InputTemplate: !Sub |
+              {
+                "InstanceId":[<instanceid>]
+              }
+
+
+
+###
+# SSM Documents
+###
+
+
+  GamerOnline:
+    Type: 'AWS::SSM::Document'
+    Properties:
+      DocumentType: Automation
+      Content:
+        schemaVersion: '0.3'
+        assumeRole: !GetAtt SSMRole.Arn
+        description: Snapshot gamer
+        parameters:
+          InstanceId:
+            type: String
+          ASG:
+            type: String
+            default: !Ref ASG
+          AutomationAssumeRole:
+            type: String
+            default: !GetAtt SSMRole.Arn
+        mainSteps:
+          - name: GetFirstRunParameter
+            action: 'aws:executeAwsApi'
+            onFailure: step:FirstEBS
+            inputs:
+              Service: ssm
+              Api: GetParameter
+              Name: 'gamer-first-run-complete'
+            outputs:
+            - Name: FirstRun
+              Selector: "$.Parameter.Value"
+              Type: String
+          - name: FirstRunCheck
+            action: aws:branch
+            inputs:
+              Choices:
+              - NextStep: GetParameter
+                Variable: '{{ GetFirstRunParameter.FirstRun }}'
+                StringEquals: true
+              Default:
+                GetParameter
+          - name: GetParameter
+            action: 'aws:executeAwsApi'
+            onFailure: step:ContinueTheLifecycle
+            inputs:
+              Service: ssm
+              Api: GetParameter
+              Name: 'gamer-latest-snapshot'
+            outputs:
+            - Name: SnapshotId
+              Selector: "$.Parameter.Value"
+              Type: String
+          - name: GetEC2AZ
+            action: 'aws:executeAwsApi'
+            onFailure: step:ContinueTheLifecycle
+            inputs:
+              Service: ec2
+              Api: DescribeInstances
+              InstanceIds: 
+               - '{{ InstanceId }}'
+            outputs:
+            - Name: AvailabilityZone
+              Selector: "$.Reservations[0].Instances[0].Placement.AvailabilityZone"
+              Type: String
+          - name: CreateVolume
+            action: 'aws:executeAwsApi'
+            onFailure: step:ContinueTheLifecycle
+            inputs:
+              Service: ec2
+              Api: CreateVolume
+              SnapshotId: '{{ GetParameter.SnapshotId }}'
+              AvailabilityZone: '{{ GetEC2AZ.AvailabilityZone }}'
+              Size: !Ref HomeVolumeSize
+              VolumeType: gp3
+            outputs:
+            - Name: VolumeId
+              Selector: "$.VolumeId"
+              Type: String
+          - name: WaitCompleteVolume
+            action: 'aws:waitForAwsResourceProperty'
+            inputs:
+              Service: ec2
+              Api: DescribeVolumes
+              VolumeIds: 
+                - '{{ CreateVolume.VolumeId }}'
+              PropertySelector: "$.Volumes[0].State"
+              DesiredValues: 
+                - available
+          - name: AttachVolume
+            action: 'aws:executeAwsApi'
+            onFailure: step:ContinueTheLifecycle
+            inputs:
+              Service: ec2
+              Api: AttachVolume
+              VolumeId: '{{ CreateVolume.VolumeId }}'
+              Device: '/dev/sdd'
+              InstanceId: '{{ InstanceId }}'
+          - name: ContinueTheLifecycle
+            action: 'aws:executeAwsApi'
+            inputs:
+              Service: autoscaling
+              Api: CompleteLifecycleAction
+              LifecycleHookName: !Ref GamerLaunchHook
+              AutoScalingGroupName: '{{ ASG }}'
+              InstanceId: '{{ InstanceId }}'
+              LifecycleActionResult: CONTINUE
+          - name: Mount
+            action: 'aws:runCommand'
+            inputs:
+              DocumentName: AWS-RunShellScript
+              InstanceIds:
+                - '{{ InstanceId }}'
+              Parameters:
+                executionTimeout: '120'
+                commands:
+                  - |-
+                      while ! test -d "/home/gamer"; do
+                        sleep 3
+                        echo "Waiting for user creation"
+                      done
+                      mount /dev/nvme2n1 /home/gamer
+                      chown -R gamer:gamer /home/gamer
+            isEnd: true
+          - name: FirstEBS
+            action: 'aws:executeAwsApi'
+            onFailure: step:ContinueFirstVolumeLifecycle
+            inputs:
+              Service: ec2
+              Api: DescribeInstances
+              InstanceIds: 
+               - '{{ InstanceId }}'
+            outputs:
+            - Name: AvailabilityZone
+              Selector: "$.Reservations[0].Instances[0].Placement.AvailabilityZone"
+              Type: String
+          - name: CreateFirstVolume
+            action: 'aws:executeAwsApi'
+            onFailure: step:ContinueFirstVolumeLifecycle
+            inputs:
+              Service: ec2
+              Api: CreateVolume
+              AvailabilityZone: '{{ FirstEBS.AvailabilityZone }}'
+              Size: !Ref HomeVolumeSize
+              VolumeType: gp3
+            outputs:
+            - Name: VolumeId
+              Selector: "$.VolumeId"
+              Type: String
+          - name: WaitCompleteFirstVolume
+            action: 'aws:waitForAwsResourceProperty'
+            onFailure: step:ContinueFirstVolumeLifecycle
+            inputs:
+              Service: ec2
+              Api: DescribeVolumes
+              VolumeIds: 
+                - '{{ CreateFirstVolume.VolumeId }}'
+              PropertySelector: "$.Volumes[0].State"
+              DesiredValues: 
+                - available
+          - name: AttachFirstVolume
+            action: 'aws:executeAwsApi'
+            onFailure: step:ContinueFirstVolumeLifecycle
+            inputs:
+              Service: ec2
+              Api: AttachVolume
+              VolumeId: '{{ CreateFirstVolume.VolumeId }}'
+              Device: '/dev/sdd'
+              InstanceId: '{{ InstanceId }}'
+          - name: ContinueFirstVolumeLifecycle
+            action: 'aws:executeAwsApi'
+            inputs:
+              Service: autoscaling
+              Api: CompleteLifecycleAction
+              LifecycleHookName: !Ref GamerLaunchHook
+              AutoScalingGroupName: '{{ ASG }}'
+              InstanceId: '{{ InstanceId }}'
+              LifecycleActionResult: CONTINUE
+          - name: MountNew
+            action: 'aws:runCommand'
+            inputs:
+              DocumentName: AWS-RunShellScript
+              InstanceIds:
+                - '{{ InstanceId }}'
+              Parameters:
+                executionTimeout: '120'
+                commands:
+                  - 'mkfs -t xfs /dev/nvme2n1'
+                  - |-
+                      while ! test -d "/home/gamer"; do
+                        sleep 3
+                        echo "Waiting for user creation"
+                      done
+                      mount /dev/nvme2n1 /home/gamer
+                      chown -R gamer:gamer /home/gamer
+
+
+  GamerOffline:
+    Type: 'AWS::SSM::Document'
+    Properties:
+      DocumentType: Automation
+      Content:
+        schemaVersion: '0.3'
+        assumeRole: !GetAtt SSMRole.Arn
+        description: Snapshot home folder.
+        parameters:
+          InstanceId:
+            type: String
+          ASG:
+            type: String
+            default: !Ref ASG
+          AutomationAssumeRole:
+            type: String
+            default: !GetAtt SSMRole.Arn
+        mainSteps:
+          - name: GetVolumeID
+            action: 'aws:executeAwsApi'
+            inputs:
+              Service: ec2
+              Api: DescribeVolumes
+              Filters:  
+                - Name: 'size'
+                  Values: 
+                  - !Ref HomeVolumeSize
+                - Name: "attachment.instance-id"
+                  Values: 
+                  - '{{ InstanceId }}'
+            outputs:
+            - Name: VolumeId
+              Selector: 'Volumes[0].VolumeId'
+              Type: String
+          - name: Shutdown
+            action: 'aws:runCommand'
+            onFailure: step:ContinueTheLifecycle
+            timeoutSeconds: 25
+            inputs:
+              DocumentName: AWS-RunShellScript
+              InstanceIds:
+                - '{{ InstanceId }}'
+              Parameters:
+                executionTimeout: '20'
+                commands:
+                  - 'shutdown now'
+          - name: ContinueTheLifecycle
+            action: 'aws:executeAwsApi'
+            onFailure: step:SnapshotVolume
+            inputs:
+              Service: autoscaling
+              Api: CompleteLifecycleAction
+              LifecycleHookName: !Ref GamerTerminateHook
+              AutoScalingGroupName: '{{ ASG }}'
+              InstanceId: '{{ InstanceId }}'
+              LifecycleActionResult: CONTINUE
+          - name: SnapshotVolume
+            action: 'aws:executeAwsApi'
+            inputs:
+              Service: ec2
+              Api: CreateSnapshot
+              VolumeId: '{{ GetVolumeID.VolumeId }}'
+            outputs:
+            - Name: SnapshotId
+              Selector: "$.SnapshotId"
+              Type: String
+            onFailure: step:DeleteVolume
+          - name: WaitCompleteSnapshot
+            action: 'aws:waitForAwsResourceProperty'
+            inputs:
+              Service: ec2
+              Api: DescribeSnapshots
+              SnapshotIds: 
+                - '{{ SnapshotVolume.SnapshotId }}'
+              PropertySelector: "$.Snapshots[0].State"
+              DesiredValues: 
+                - completed
+            onFailure: step:DeleteVolume
+          - name: PutParameter
+            action: 'aws:executeAwsApi'
+            inputs:
+              Service: ssm
+              Api: PutParameter
+              Value: '{{ SnapshotVolume.SnapshotId }}'
+              Name: gamer-latest-snapshot
+              Overwrite: true
+              Type: String
+            onFailure: step:DeleteVolume
+          - name: PutFirstRunParameter
+            action: 'aws:executeAwsApi'
+            inputs:
+              Service: ssm
+              Api: PutParameter
+              Value: 'true'
+              Name: gamer-first-run-complete
+              Overwrite: true
+              Type: String
+            onFailure: step:DeleteVolume
+          - name: DeleteVolume
+            action: 'aws:executeAwsApi'
+            inputs:
+              Service: ec2
+              Api: DeleteVolume
+              VolumeId: '{{ GetVolumeID.VolumeId }}'
+
+
+###
+# User
+###
+  ScalingUser:
+    Type: AWS::IAM::User
+    Properties:
+      Policies:
+        - PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'autoscaling:SetDesiredCapacity'
+                Resource: !Sub 'arn:aws:autoscaling:${AWS::Region}:${AWS::AccountId}:autoScalingGroup:*:autoScalingGroupName/${ASG}'
+          PolicyName: scale-asg
+  ScalingUserKey:
+    Type: AWS::IAM::AccessKey
+    Properties: 
+      Serial: 1 
+      Status: Active
+      UserName: !Ref ScalingUser
+
+###
+# ImageBuild
+###
+  Component:
+    Type: 'AWS::ImageBuilder::Component'
+    Properties:
+      Name: !Sub '${AWS::StackName}-dcvandsteam'
+      Platform: 'Linux'
+      Version: !Ref Version
+      Description: 'Create image with DCV and steam'
+      SupportedOsVersions: 
+        - 'Amazon Linux 2'
+      Data: |
+        name: DCV and Steam - InlineData
+        description: This is hello world testing doc
+        schemaVersion: 1.0
+
+        phases:
+          - name: build
+            steps:
+              - name: Update
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |-
+                        set -eu
+                        dpkg --add-architecture i386
+                        apt-get update -y && apt upgrade -y
+              - name: RestartTrigger
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      REBOOT_INDICATOR=/var/tmp/reboot-indicator
+                      if [ -f "${REBOOT_INDICATOR}" ]; then
+                        echo 'The reboot file exists. Deleting it and exiting with success.'
+                        rm "${REBOOT_INDICATOR}"
+                        exit 0
+                      fi
+                      echo 'The reboot file does not exist. Creating it and triggering a restart.'
+                      touch "${REBOOT_INDICATOR}"
+                      exit 194
+              - name: BuildAMD
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |-
+                        set -eu
+                        cd /tmp
+                        curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+                        apt-get install unzip -y
+                        unzip awscliv2.zip
+                        ./aws/install
+                        aws s3 cp --recursive s3://ec2-amd-linux-drivers/latest/ .
+                        tar -xf amdgpu-pro*ubuntu*.xz
+                        apt install linux-modules-extra-$(uname -r) -y
+                        cd amdgpu-pro-20.20-*-ubuntu-18.04
+                        cat RPM-GPG-KEY-amdgpu | apt-key add -
+                        ./amdgpu-pro-install -y --opencl=pal,legacy
+                        dpkg -i opencl-amdgpu-pro_20.20-*_amd64.deb
+                        dpkg -i amf-amdgpu-pro_20.20-*_amd64.deb
+              - name: RestartTriggerTwo
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      REBOOT_INDICATOR=/var/tmp/reboot-indicator
+                      if [ -f "${REBOOT_INDICATOR}" ]; then
+                        echo 'The reboot file exists. Deleting it and exiting with success.'
+                        rm "${REBOOT_INDICATOR}"
+                        exit 0
+                      fi
+                      echo 'The reboot file does not exist. Creating it and triggering a restart.'
+                      touch "${REBOOT_INDICATOR}"
+                      exit 194
+              - name: BuildX
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |-
+                        set -eu
+                        apt-get install xorg-dev ubuntu-mate-desktop -y
+                        apt-get purge ifupdown -y
+                        cat <<- EOF > /etc/X11/xorg.conf
+                        Section "ServerLayout"
+                            Identifier     "Layout0"
+                            Screen          0 "Screen0"
+                            InputDevice     "Keyboard0" "CoreKeyboard"
+                            InputDevice     "Mouse0" "CorePointer"
+                        EndSection
+                        Section "Files"
+                            ModulePath "/opt/amdgpu/lib64/xorg/modules/drivers"
+                            ModulePath "/opt/amdgpu/lib/xorg/modules"
+                            ModulePath "/opt/amdgpu-pro/lib/xorg/modules/extensions"
+                            ModulePath "/opt/amdgpu-pro/lib64/xorg/modules/extensions"
+                            ModulePath "/usr/lib64/xorg/modules"
+                            ModulePath "/usr/lib/xorg/modules"
+                        EndSection
+                        Section "InputDevice"
+                            # generated from default
+                            Identifier     "Mouse0"
+                            Driver         "mouse"
+                            Option         "Protocol" "auto"
+                            Option         "Device" "/dev/psaux"
+                            Option         "Emulate3Buttons" "no"
+                            Option         "ZAxisMapping" "4 5"
+                        EndSection
+                        Section "InputDevice"
+                            # generated from default
+                            Identifier     "Keyboard0"
+                            Driver         "kbd"
+                        EndSection
+                        Section "Monitor"
+                            Identifier     "Monitor0"
+                            VendorName     "Unknown"
+                            ModelName      "Unknown"
+                        EndSection
+                        Section "Device"
+                            Identifier     "Device0"
+                            Driver         "amdgpu"
+                            VendorName     "AMD"
+                            BoardName      "Radeon MxGPU V520"
+                            BusID          "PCI:0:30:0"
+                        EndSection
+                        Section "Extensions"
+                            Option         "DPMS" "Disable"
+                        EndSection
+                        Section "Screen"
+                            Identifier     "Screen0"
+                            Device         "Device0"
+                            Monitor        "Monitor0"
+                            DefaultDepth   24
+                            Option         "AllowEmptyInitialConfiguration" "True"
+                            SubSection "Display"
+                                Virtual    3840 2160
+                                Depth      32
+                            EndSubSection
+                        EndSection
+                        EOF
+              - name: RestartTriggerThree
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |
+                      REBOOT_INDICATOR=/var/tmp/reboot-indicator
+                      if [ -f "${REBOOT_INDICATOR}" ]; then
+                        echo 'The reboot file exists. Deleting it and exiting with success.'
+                        rm "${REBOOT_INDICATOR}"
+                        exit 0
+                      fi
+                      echo 'The reboot file does not exist. Creating it and triggering a restart.'
+                      touch "${REBOOT_INDICATOR}"
+                      exit 194
+              - name: FinalBuildDCVSteam
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |-
+                        set -eu
+                        cd /tmp
+                        wget https://d1uj6qtbmh3dt5.cloudfront.net/NICE-GPG-KEY
+                        gpg --import NICE-GPG-KEY
+                        wget https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-ubuntu1804-x86_64.tgz
+                        tar -xvzf nice-dcv-ubuntu1804-x86_64.tgz
+                        cd nice-dcv-2022*-x86_64
+                        apt-get install libxcb-damage0 -y
+                        apt-get install libxcb-xtest0 -y
+                        dpkg -i nice-dcv-server_*_amd64.ubuntu1804.deb
+                        usermod -aG video dcv
+                        dpkg -i nice-dcv-gl_*_amd64.ubuntu1804.deb
+                        dcvusbdriverinstaller --quiet
+                        usermod -aG video dcv
+                        cat <<- EOF > /etc/dcv/dcv.conf
+                        [license]
+                        [log]
+                        [session-management]
+                        create-session = true
+                        [session-management/defaults]
+                        [session-management/automatic-console-session]
+                        owner="gamer"
+                        storage-root="%home%/storage/"
+                        [display]
+                        target-fps = 30
+                        [connectivity]
+                        enable-quic-frontend=true
+                        [security]
+                        authentication="none"
+                        EOF
+                        systemctl enable dcvserver
+                        apt-key adv --keyserver keyserver.ubuntu.com --recv-keys B05498B7
+                        echo "deb http://repo.steampowered.com/steam/ precise steam" >> /etc/apt/sources.list.d/steam.list
+                        apt-get update -y
+                        apt-get install -y --reinstall libgtk2.0-0
+                        apt-get install -y steam steam-libs-amd64:amd64 steam-libs-i386:i386 xdg-desktop-portal xdg-desktop-portal-gtk
+                        cat <<- EOF > /etc/lightdm/lightdm.conf
+                        #Optional  auto login, remove to use password
+                        [SeatDefaults]
+                        autologin-user=gamer
+                        autologin-user-timeout=0
+                        user-session=ubuntu
+                        EOF
+                        sed '/macaddress\|match\|set-name/d' /etc/netplan/50-cloud-init.yaml
+
+
+  InfrastructureConfiguration:
+    Type: 'AWS::ImageBuilder::InfrastructureConfiguration'
+    Properties:
+      Name: !Sub '${AWS::StackName}-infrastructure-configuration-gamer-build'
+      InstanceProfileName: !Ref GamerInstanceProfile
+      InstanceTypes:
+        - 'g4ad.xlarge'
+      TerminateInstanceOnFailure: false
+      SecurityGroupIds:
+        - !GetAtt GamerSecurityGroup.GroupId
+      SubnetId: !Ref PubSubnet01
+
+  ImageRecipe:
+    Type: 'AWS::ImageBuilder::ImageRecipe'
+    Properties:
+      Name: !Sub '${AWS::StackName}-image-recipe-dcx-steam'
+      Version: !Ref Version
+      ParentImage: !Ref BaseAMIId
+      Description: 'Steam DCX Image'
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs: 
+            DeleteOnTermination: true
+            Encrypted: true
+            VolumeSize: !Ref RootVolumeSize
+            VolumeType: gp3
+
+      Components:
+        - ComponentArn: !Ref Component
+
+  Image:
+    Type: 'AWS::ImageBuilder::Image'
+    Properties:
+      ImageRecipeArn: !Ref ImageRecipe
+      InfrastructureConfigurationArn: !Ref InfrastructureConfiguration
+      ImageTestsConfiguration:
+        ImageTestsEnabled: false
+###
+# Outputs
+###
+
+# Optional to allow a machine scale the Autoscaling Group in and out
+Outputs:
+  AccessKey:
+    Value: !Ref ScalingUserKey
+  SecretKey:
+    Value: !GetAtt ScalingUserKey.SecretAccessKey
