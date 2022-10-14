@@ -494,7 +494,7 @@ Resources:
               Choices:
               - NextStep: GetParameter
                 Variable: '{{ GetFirstRunParameter.FirstRun }}'
-                StringEquals: true
+                StringEquals: 'true'
               Default:
                 GetParameter
           - name: GetParameter
@@ -678,10 +678,10 @@ Resources:
               Filters:  
                 - Name: 'size'
                   Values: 
-                  - !Ref HomeVolumeSize
+                  - !Sub '${HomeVolumeSize}'
                 - Name: "attachment.instance-id"
                   Values: 
-                  - '{{ InstanceId }}'
+                  - "{{ InstanceId }}"
             outputs:
             - Name: VolumeId
               Selector: 'Volumes[0].VolumeId'
@@ -808,6 +808,7 @@ Resources:
                         set -eu
                         dpkg --add-architecture i386
                         apt-get update -y && apt upgrade -y
+                        apt-get remove update-manager -y
               - name: RestartTrigger
                 action: ExecuteBash
                 inputs:
@@ -933,7 +934,7 @@ Resources:
                       echo 'The reboot file does not exist. Creating it and triggering a restart.'
                       touch "${REBOOT_INDICATOR}"
                       exit 194
-              - name: FinalBuildDCVSteam
+              - name: BuildDCV
                 action: ExecuteBash
                 inputs:
                   commands:
@@ -969,11 +970,6 @@ Resources:
                         authentication="none"
                         EOF
                         systemctl enable dcvserver
-                        apt-key adv --keyserver keyserver.ubuntu.com --recv-keys B05498B7
-                        echo "deb http://repo.steampowered.com/steam/ precise steam" >> /etc/apt/sources.list.d/steam.list
-                        apt-get update -y
-                        DEBIAN_FRONTEND=noninteractive apt-get install -yq --reinstall libgtk2.0-0
-                        apt-get install -y steam steam-libs-amd64:amd64 steam-libs-i386:i386 xdg-desktop-portal xdg-desktop-portal-gtk
                         cat <<- EOF > /etc/lightdm/lightdm.conf
                         #Optional  auto login, remove to use password
                         [SeatDefaults]
@@ -982,6 +978,19 @@ Resources:
                         user-session=ubuntu
                         EOF
                         sed '/macaddress\|match\|set-name/d' /etc/netplan/50-cloud-init.yaml
+              - name: BuildSteam
+                action: ExecuteBash
+                inputs:
+                  commands:
+                    - |-
+                        export DEBIAN_FRONTEND=noninteractive
+                        apt-key adv --keyserver keyserver.ubuntu.com --recv-keys B05498B7
+                        echo "deb http://repo.steampowered.com/steam/ precise steam" >> /etc/apt/sources.list.d/steam.list
+                        apt-get update -y -q
+                        apt-get install -y -q --reinstall libgtk2.0-0
+                        apt-get install -y -q steam steam-libs-amd64:amd64 steam-libs-i386:i386
+                        apt-get install -y -q xdg-desktop-portal xdg-desktop-portal-gtk
+                        exit 0
 
 
   InfrastructureConfiguration:

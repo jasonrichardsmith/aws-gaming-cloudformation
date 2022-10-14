@@ -22,7 +22,8 @@ Machines must be spun down by either a spot instance terminating event or
 the AutoScaling Group changing its capacity.  Otherwise no snapshotting or automatic
 EBS mounting will occur.
 
-Please do not rely on snapshotting to work!
+Please do not rely on snapshotting to work! I am not responsible for lost data.
+
 There is no snapshot cleanup at this time. You will have to manually remove old snapshots.
 If anything fails you may have old EBS volumes laying around.
 
@@ -39,9 +40,16 @@ This comes with no guarantees!
 ## Launching
 
 Generate a parameters file.
-```
+```bash
 ./addcidr.sh > myparameters.json
 ```
+
+Create a password for the gamer user
+
+```bash
+aws secretsmanager create-secret --name gamer-secret-password --secret-string 'yourpasswordhere'
+```
+Password gets set every time a machine starts so you can update the password anytime before a scale out event.
 
 Create stack
 ```bash
@@ -56,9 +64,21 @@ Scale your Autoscaling Group to 1.
 
 When your instance is running you can connect your Nice DCV client.
 
-```Instance IP:8443#gamer```
+```
+<Instance IP>:8443#gamer
+```
 
+I cannot help with networking issues due to your home setup.
 
 ## Deleting
 
 Delete the stack and then clean up any snapshots and AMIs you may have laying around.
+
+
+## Roadmap
+
+- Lambda to clean up old snapshots based on n snapshots to retain.
+- SMS to warn of spot termination
+- Automatic scale in when Nice DCV session has been idle for n minutes
+- Tagging
+- Billing alerts
