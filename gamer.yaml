@@ -7,7 +7,7 @@ Parameters:
     Description: AMI to use, defaults to Ubuntu 18.04 latest
   Version:
     Type: String 
-    Default: '1.0.0'
+    Default: '1.0.4'
     Description: Version for Image, must be updated when image has changed, or updates will fail.
   RootVolumeSize:
     Type: Number 
@@ -20,7 +20,10 @@ Parameters:
   MyCIDR:
     Type: String
     Description: User cidr range to access Nice DCV
-  BuildImage:
+  BuildInstance:
+    Type: String
+    Default: 'g4ad.xlarge'
+  GamerInstance:
     Type: String
     Default: 'g4ad.xlarge'
 
@@ -969,7 +972,7 @@ Resources:
                         apt-key adv --keyserver keyserver.ubuntu.com --recv-keys B05498B7
                         echo "deb http://repo.steampowered.com/steam/ precise steam" >> /etc/apt/sources.list.d/steam.list
                         apt-get update -y
-                        apt-get install -y --reinstall libgtk2.0-0
+                        DEBIAN_FRONTEND=noninteractive apt-get install -yq --reinstall libgtk2.0-0
                         apt-get install -y steam steam-libs-amd64:amd64 steam-libs-i386:i386 xdg-desktop-portal xdg-desktop-portal-gtk
                         cat <<- EOF > /etc/lightdm/lightdm.conf
                         #Optional  auto login, remove to use password
