@@ -659,7 +659,7 @@ Resources:
       Content:
         schemaVersion: '0.3'
         assumeRole: !GetAtt SSMRole.Arn
-        description: Snapshot home folder.
+        description: Snapshot home folder for gamer.
         parameters:
           InstanceId:
             type: String
@@ -693,7 +693,7 @@ Resources:
             inputs:
               DocumentName: AWS-RunShellScript
               InstanceIds:
-                - '{{ InstanceId }}'
+                - "{{ InstanceId }}"
               Parameters:
                 executionTimeout: '20'
                 commands:
@@ -713,7 +713,7 @@ Resources:
             inputs:
               Service: ec2
               Api: CreateSnapshot
-              VolumeId: '{{ GetVolumeID.VolumeId }}'
+              VolumeId: "{{ GetVolumeID.VolumeId }}"
             outputs:
             - Name: SnapshotId
               Selector: "$.SnapshotId"
@@ -725,7 +725,7 @@ Resources:
               Service: ec2
               Api: DescribeSnapshots
               SnapshotIds: 
-                - '{{ SnapshotVolume.SnapshotId }}'
+                - "{{ SnapshotVolume.SnapshotId }}"
               PropertySelector: "$.Snapshots[0].State"
               DesiredValues: 
                 - completed
@@ -735,7 +735,7 @@ Resources:
             inputs:
               Service: ssm
               Api: PutParameter
-              Value: '{{ SnapshotVolume.SnapshotId }}'
+              Value: "{{ SnapshotVolume.SnapshotId }}"
               Name: gamer-latest-snapshot
               Overwrite: true
               Type: String
@@ -755,7 +755,7 @@ Resources:
             inputs:
               Service: ec2
               Api: DeleteVolume
-              VolumeId: '{{ GetVolumeID.VolumeId }}'
+              VolumeId: "{{ GetVolumeID.VolumeId }}"
 
 
 ###
