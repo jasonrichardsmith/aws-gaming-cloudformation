@@ -82,3 +82,4 @@ Delete the stack and then clean up any snapshots and AMIs you may have laying ar
 - Automatic scale in when Nice DCV session has been idle for n minutes
 - Tagging
 - Billing alerts
+- Other image recipes
