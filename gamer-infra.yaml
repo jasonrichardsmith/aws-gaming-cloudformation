@@ -1,14 +1,14 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: 'AWS gaming setup'
 Parameters:
-  BaseAMIId:
-    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>' 
-    Default: '/aws/service/canonical/ubuntu/server/18.04/stable/current/amd64/hvm/ebs-gp2/ami-id'
-    Description: AMI to use, defaults to Ubuntu 18.04 latest
-  Version:
-    Type: String 
-    Default: '1.0.0'
-    Description: Version for Image, must be updated when image has changed, or updates will fail.
+  #ImageId:
+  #  Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>' 
+  #  Description: AMI to use
+  #  Default: '/aws/service/canonical/ubuntu/server/18.04/stable/current/amd64/hvm/ebs-gp2/ami-id'
+  ImageId:
+    Type: 'AWS::EC2::Image::Id' 
+    Description: AMI to use
+    Default: ami-05df55ba9fa4c41fc
   RootVolumeSize:
     Type: Number 
     Default: 30
@@ -20,9 +20,6 @@ Parameters:
   MyCIDR:
     Type: String
     Description: User cidr range to access Nice DCV
-  BuildInstance:
-    Type: String
-    Default: 'g4ad.xlarge'
   GamerInstance:
     Type: String
     Default: 'g4ad.xlarge'
@@ -175,10 +172,14 @@ Resources:
               VolumeType: gp3
         IamInstanceProfile: 
           Arn: !GetAtt GamerInstanceProfile.Arn
-        ImageId: !GetAtt Image.ImageId
+        ImageId: !Ref ImageId
         UserData:
             Fn::Base64: !Sub |
                 #!/bin/bash -x
+                apt update -y
+                apt install snapd -y
+                snap install amazon-ssm-agent --classic
+                snap start amazon-ssm-agent
                 password=$(aws secretsmanager get-secret-value --secret-id gamer-secret-password --output text --query "SecretString")
                 useradd -m -U -p $(openssl passwd -1 $password) gamer
 
@@ -209,7 +210,7 @@ Resources:
             LaunchTemplateId: !Ref LaunchTemplate
             Version: !GetAtt LaunchTemplate.LatestVersionNumber
           Overrides:
-            - InstanceType: g4ad.xlarge
+            - InstanceType: !Ref GamerInstance
 
 ###
 # IAM
@@ -780,256 +781,30 @@ Resources:
       Status: Active
       UserName: !Ref ScalingUser
 
-###
-# ImageBuild
-###
-  Component:
-    Type: 'AWS::ImageBuilder::Component'
+
+  InstanceProfile:
+    Type: AWS::SSM::Parameter
     Properties:
-      Name: !Sub '${AWS::StackName}-dcvandsteam'
-      Platform: 'Linux'
-      Version: !Ref Version
-      Description: 'Create image with DCV and steam'
-      SupportedOsVersions: 
-        - 'Amazon Linux 2'
-      Data: |
-        name: DCV and Steam - InlineData
-        description: This is hello world testing doc
-        schemaVersion: 1.0
+      Name: '/gamer/infra/instance-profile'
+      Type: String
+      Value: !Ref GamerInstanceProfile
+      Description: Instance Profile for building Images
 
-        phases:
-          - name: build
-            steps:
-              - name: Update
-                action: ExecuteBash
-                inputs:
-                  commands:
-                    - |-
-                        set -eu
-                        dpkg --add-architecture i386
-                        apt-get update -y && apt upgrade -y
-                        apt-get remove update-manager -y
-              - name: RestartTrigger
-                action: ExecuteBash
-                inputs:
-                  commands:
-                    - |
-                      REBOOT_INDICATOR=/var/tmp/reboot-indicator
-                      if [ -f "${REBOOT_INDICATOR}" ]; then
-                        echo 'The reboot file exists. Deleting it and exiting with success.'
-                        rm "${REBOOT_INDICATOR}"
-                        exit 0
-                      fi
-                      echo 'The reboot file does not exist. Creating it and triggering a restart.'
-                      touch "${REBOOT_INDICATOR}"
-                      exit 194
-              - name: BuildAMD
-                action: ExecuteBash
-                inputs:
-                  commands:
-                    - |-
-                        set -eu
-                        cd /tmp
-                        curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-                        apt-get install unzip -y
-                        unzip awscliv2.zip
-                        ./aws/install
-                        aws s3 cp --recursive s3://ec2-amd-linux-drivers/latest/ .
-                        tar -xf amdgpu-pro*ubuntu*.xz
-                        apt install linux-modules-extra-$(uname -r) -y
-                        cd amdgpu-pro-20.20-*-ubuntu-18.04
-                        cat RPM-GPG-KEY-amdgpu | apt-key add -
-                        ./amdgpu-pro-install -y --opencl=pal,legacy
-                        dpkg -i opencl-amdgpu-pro_20.20-*_amd64.deb
-                        dpkg -i amf-amdgpu-pro_20.20-*_amd64.deb
-              - name: RestartTriggerTwo
-                action: ExecuteBash
-                inputs:
-                  commands:
-                    - |
-                      REBOOT_INDICATOR=/var/tmp/reboot-indicator
-                      if [ -f "${REBOOT_INDICATOR}" ]; then
-                        echo 'The reboot file exists. Deleting it and exiting with success.'
-                        rm "${REBOOT_INDICATOR}"
-                        exit 0
-                      fi
-                      echo 'The reboot file does not exist. Creating it and triggering a restart.'
-                      touch "${REBOOT_INDICATOR}"
-                      exit 194
-              - name: BuildX
-                action: ExecuteBash
-                inputs:
-                  commands:
-                    - |-
-                        set -eu
-                        apt-get install xorg-dev ubuntu-mate-desktop -y
-                        apt-get purge ifupdown -y
-                        cat <<- EOF > /etc/X11/xorg.conf
-                        Section "ServerLayout"
-                            Identifier     "Layout0"
-                            Screen          0 "Screen0"
-                            InputDevice     "Keyboard0" "CoreKeyboard"
-                            InputDevice     "Mouse0" "CorePointer"
-                        EndSection
-                        Section "Files"
-                            ModulePath "/opt/amdgpu/lib64/xorg/modules/drivers"
-                            ModulePath "/opt/amdgpu/lib/xorg/modules"
-                            ModulePath "/opt/amdgpu-pro/lib/xorg/modules/extensions"
-                            ModulePath "/opt/amdgpu-pro/lib64/xorg/modules/extensions"
-                            ModulePath "/usr/lib64/xorg/modules"
-                            ModulePath "/usr/lib/xorg/modules"
-                        EndSection
-                        Section "InputDevice"
-                            # generated from default
-                            Identifier     "Mouse0"
-                            Driver         "mouse"
-                            Option         "Protocol" "auto"
-                            Option         "Device" "/dev/psaux"
-                            Option         "Emulate3Buttons" "no"
-                            Option         "ZAxisMapping" "4 5"
-                        EndSection
-                        Section "InputDevice"
-                            # generated from default
-                            Identifier     "Keyboard0"
-                            Driver         "kbd"
-                        EndSection
-                        Section "Monitor"
-                            Identifier     "Monitor0"
-                            VendorName     "Unknown"
-                            ModelName      "Unknown"
-                        EndSection
-                        Section "Device"
-                            Identifier     "Device0"
-                            Driver         "amdgpu"
-                            VendorName     "AMD"
-                            BoardName      "Radeon MxGPU V520"
-                            BusID          "PCI:0:30:0"
-                        EndSection
-                        Section "Extensions"
-                            Option         "DPMS" "Disable"
-                        EndSection
-                        Section "Screen"
-                            Identifier     "Screen0"
-                            Device         "Device0"
-                            Monitor        "Monitor0"
-                            DefaultDepth   24
-                            Option         "AllowEmptyInitialConfiguration" "True"
-                            SubSection "Display"
-                                Virtual    3840 2160
-                                Depth      32
-                            EndSubSection
-                        EndSection
-                        EOF
-              - name: RestartTriggerThree
-                action: ExecuteBash
-                inputs:
-                  commands:
-                    - |
-                      REBOOT_INDICATOR=/var/tmp/reboot-indicator
-                      if [ -f "${REBOOT_INDICATOR}" ]; then
-                        echo 'The reboot file exists. Deleting it and exiting with success.'
-                        rm "${REBOOT_INDICATOR}"
-                        exit 0
-                      fi
-                      echo 'The reboot file does not exist. Creating it and triggering a restart.'
-                      touch "${REBOOT_INDICATOR}"
-                      exit 194
-              - name: BuildDCV
-                action: ExecuteBash
-                inputs:
-                  commands:
-                    - |-
-                        set -eu
-                        cd /tmp
-                        wget https://d1uj6qtbmh3dt5.cloudfront.net/NICE-GPG-KEY
-                        gpg --import NICE-GPG-KEY
-                        wget https://d1uj6qtbmh3dt5.cloudfront.net/nice-dcv-ubuntu1804-x86_64.tgz
-                        tar -xvzf nice-dcv-ubuntu1804-x86_64.tgz
-                        cd nice-dcv-2022*-x86_64
-                        apt-get install libxcb-damage0 -y
-                        apt-get install libxcb-xtest0 -y
-                        dpkg -i nice-dcv-server_*_amd64.ubuntu1804.deb
-                        usermod -aG video dcv
-                        dpkg -i nice-dcv-gl_*_amd64.ubuntu1804.deb
-                        dcvusbdriverinstaller --quiet
-                        usermod -aG video dcv
-                        cat <<- EOF > /etc/dcv/dcv.conf
-                        [license]
-                        [log]
-                        [session-management]
-                        create-session = true
-                        [session-management/defaults]
-                        [session-management/automatic-console-session]
-                        owner="gamer"
-                        storage-root="%home%/storage/"
-                        [display]
-                        target-fps = 30
-                        [connectivity]
-                        enable-quic-frontend=true
-                        [security]
-                        authentication="none"
-                        EOF
-                        systemctl enable dcvserver
-                        cat <<- EOF > /etc/lightdm/lightdm.conf
-                        #Optional  auto login, remove to use password
-                        [SeatDefaults]
-                        autologin-user=gamer
-                        autologin-user-timeout=0
-                        user-session=ubuntu
-                        EOF
-                        sed '/macaddress\|match\|set-name/d' /etc/netplan/50-cloud-init.yaml
-              - name: BuildSteam
-                action: ExecuteBash
-                inputs:
-                  commands:
-                    - |-
-                        export DEBIAN_FRONTEND=noninteractive
-                        apt-key adv --keyserver keyserver.ubuntu.com --recv-keys B05498B7
-                        echo "deb http://repo.steampowered.com/steam/ precise steam" >> /etc/apt/sources.list.d/steam.list
-                        apt-get update -y -q
-                        apt-get install -y -q --reinstall libgtk2.0-0
-                        apt-get install -y -q steam steam-libs-amd64:amd64 steam-libs-i386:i386
-                        apt-get install -y -q xdg-desktop-portal xdg-desktop-portal-gtk
-                        exit 0
-
-
-  InfrastructureConfiguration:
-    Type: 'AWS::ImageBuilder::InfrastructureConfiguration'
+  SecurityGroup:
+    Type: AWS::SSM::Parameter
     Properties:
-      Name: !Sub '${AWS::StackName}-infrastructure-configuration-gamer-build'
-      InstanceProfileName: !Ref GamerInstanceProfile
-      InstanceTypes:
-        - 'g4ad.xlarge'
-      TerminateInstanceOnFailure: false
-      SecurityGroupIds:
-        - !GetAtt GamerSecurityGroup.GroupId
-      SubnetId: !Ref PubSubnet01
+      Name: '/gamer/infra/security-group'
+      Type: String
+      Value: !GetAtt GamerSecurityGroup.GroupId
+      Description: SecurityGroup for building Images
 
-  ImageRecipe:
-    Type: 'AWS::ImageBuilder::ImageRecipe'
+  Subnet:
+    Type: AWS::SSM::Parameter
     Properties:
-      Name: !Sub '${AWS::StackName}-image-recipe-dcx-steam'
-      Version: !Ref Version
-      ParentImage: !Ref BaseAMIId
-      Description: 'Steam DCX Image'
-      BlockDeviceMappings:
-        - DeviceName: /dev/sda1
-          Ebs: 
-            DeleteOnTermination: true
-            Encrypted: true
-            VolumeSize: !Ref RootVolumeSize
-            VolumeType: gp3
-
-      Components:
-        - ComponentArn: !Ref Component
-
-  Image:
-    Type: 'AWS::ImageBuilder::Image'
-    Properties:
-      ImageRecipeArn: !Ref ImageRecipe
-      InfrastructureConfigurationArn: !Ref InfrastructureConfiguration
-      ImageTestsConfiguration:
-        ImageTestsEnabled: false
+      Name: '/gamer/infra/subnet'
+      Type: String
+      Value: !Ref PubSubnet01
+      Description: Subnet for building Images
 ###
 # Outputs
 ###
@@ -1040,3 +815,9 @@ Outputs:
     Value: !Ref ScalingUserKey
   SecretKey:
     Value: !GetAtt ScalingUserKey.SecretAccessKey
+  GamerInstanceProfile:
+    Value: !Ref GamerInstanceProfile
+  SecurityGroup:
+    Value: !GetAtt GamerSecurityGroup.GroupId
+  Subnet:
+    Value: !Ref PubSubnet01
