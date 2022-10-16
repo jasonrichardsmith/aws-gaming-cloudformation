@@ -1,14 +1,10 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: 'AWS gaming setup'
 Parameters:
-  #ImageId:
-  #  Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>' 
-  #  Description: AMI to use
-  #  Default: '/aws/service/canonical/ubuntu/server/18.04/stable/current/amd64/hvm/ebs-gp2/ami-id'
   ImageId:
-    Type: 'AWS::EC2::Image::Id' 
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>' 
     Description: AMI to use
-    Default: ami-05df55ba9fa4c41fc
+    Default: '/aws/service/canonical/ubuntu/server/18.04/stable/current/amd64/hvm/ebs-gp2/ami-id'
   RootVolumeSize:
     Type: Number 
     Default: 30
