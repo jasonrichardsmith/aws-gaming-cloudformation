@@ -51,15 +51,54 @@ aws secretsmanager create-secret --name gamer-secret-password --secret-string 'y
 ```
 Password gets set every time a machine starts so you can update the password anytime before a scale out event.
 
-Create stack
+Create the stack
 ```bash
-aws cloudformation create-stack --stack-name gamer --template-body file://gamer.yaml --region eu-west-1 --capabilities CAPABILITY_NAMED_IAM --parameters file://myparameters.json
+aws cloudformation create-stack --stack-name gamer-infra \
+	--template-body file://gamer-infra.yaml \
+	--capabilities CAPABILITY_NAMED_IAM --parameters file://myparameters.json
+```
+
+Then create the AMI
+
+```bash
+aws cloudformation create-stack --stack-name amd-linux-steam-ami \
+	--template-body file://amd-linux-steam-ami.yaml \
+	--capabilities CAPABILITY_NAMED_IAM
 ```
 
 Get coffee image build takes about an hour.
 
 When stack is complete you have built a new AMI and your stack is ready to deploy.
 
+Update the infra stack replacing the ImageId with your new image id reference in the parameters file.
+
+```json
+[
+  {
+    "ParameterKey": "RootVolumeSize",
+    "ParameterValue": "30"
+  },
+  {
+    "ParameterKey": "HomeVolumeSize",
+    "ParameterValue": "1000"
+  },
+  {
+    "ParameterKey": "GamerInstance",
+    "ParameterValue": "g4ad.xlarge"
+  },
+  {
+    "ParameterKey": "ImageId",
+    "ParameterValue": "/gamer/images/amd-ubuntu-dcv-steam"
+  }
+
+]
+```
+
+```bash
+aws cloudformation update-stack --stack-name gamer-infra \
+	--template-body file://gamer-infra.yaml \
+	--capabilities CAPABILITY_NAMED_IAM --parameters file://myparameters.json
+```
 Scale your Autoscaling Group to 1.
 
 When your instance is running you can connect your Nice DCV client.
