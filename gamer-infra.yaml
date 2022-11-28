@@ -46,6 +46,9 @@ Resources:
       InternetGatewayId: !Ref InetGateway
   PublicRoute:
     Type: AWS::EC2::Route
+    DependsOn: 
+      - InetGateway
+      - InetGatewayAttachment
     Properties:
       RouteTableId: !Ref PubRouteTable
       DestinationCidrBlock: 0.0.0.0/0
